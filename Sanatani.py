@@ -1,6 +1,7 @@
 import aiohttp, aiofiles, asyncio, base64, logging
 import os, platform, random, re, socket
 import sys, time, textwrap
+import yt_dlp
 
 from os import getenv
 import asyncio
@@ -11,7 +12,7 @@ from dotenv import load_dotenv
 from datetime import datetime
 from typing import Union, List, Pattern
 from logging.handlers import RotatingFileHandler
-
+from pathlib import Path
 
 from git import Repo
 from git.exc import GitCommandError, InvalidGitRepositoryError
@@ -19,7 +20,7 @@ from motor.motor_asyncio import AsyncIOMotorClient as _mongo_async_
 from pyrogram import filters
 from pyrogram import Client, filters as pyrofl
 from pytgcalls import PyTgCalls, filters as pytgfl
-
+from pyrogram.types import Message ,CallbackQuery
 
 from pyrogram import idle, __version__ as pyro_version
 from pytgcalls.__version__ import __version__ as pytgcalls_version
@@ -35,13 +36,23 @@ from pyrogram.errors import (
 )
 from pytgcalls.exceptions import NoActiveGroupCall
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from pytgcalls.types import ChatUpdate, Update, GroupCallConfig
+from pytgcalls.types import ChatUpdate, Update, GroupCallConfig 
 from pytgcalls.types import Call, MediaStream, AudioQuality, VideoQuality
 
 from PIL import Image, ImageDraw, ImageEnhance
 from PIL import ImageFilter, ImageFont, ImageOps
 from youtubesearchpython.__future__ import VideosSearch
 
+
+
+class Wheel:
+    def __init__(self):
+        self.is_active = False
+        self.participants = []
+        self.prize = ""
+
+# ایجاد نمونه از کلاس
+wheel = Wheel()
 
 loop = asyncio.get_event_loop()
 
@@ -53,8 +64,43 @@ __version__ = {
     "Pyrogram": pyro_version,
     "PyTgCalls": pytgcalls_version,
 }
+COOKIES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "youtube.cookies.txt")
 
+# تنظیمات پایه برای yt-dlp
+ydl_config = {
+    'format': 'bestaudio/best',
+    'quiet': True,
+    'no_warnings': True,
+    'extract_flat': True,
+    'noplaylist': True,
+    'nocheckcertificate': True,
+    'ignoreerrors': False,
+    'logtostderr': False,
+    'default_search': 'auto',
+    'source_address': '0.0.0.0'
+}
 
+# اضافه کردن کوکی اگر فایل وجود داشته باشد
+if os.path.exists(COOKIES_FILE):
+    ydl_config['cookiefile'] = COOKIES_FILE
+
+# تنظیمات جستجو
+ydl_opts = ydl_config.copy()
+
+# تنظیمات دانلود
+download_opts = ydl_config.copy()
+download_opts.update({
+    'format': 'bestaudio/best',
+    'postprocessors': [{
+        'key': 'FFmpegExtractAudio',
+        'preferredcodec': 'mp3',
+        'preferredquality': '192',
+    }],
+    'prefer_ffmpeg': True,
+    'keepvideo': False,
+    'outtmpl': '%(title)s.%(ext)s',
+})
+calls = {}
 # store all logs
 logging.basicConfig(
     format="[%(name)s]:: %(message)s",
@@ -80,29 +126,92 @@ if os.path.exists("Config.env"):
     load_dotenv("Config.env")
 
 
-API_ID = int(getenv("API_ID", "20901929"))
-API_HASH = getenv("API_HASH", "a3ded12cd9a4c8b1de63906e3b502e64")
-BOT_TOKEN = getenv("BOT_TOKEN", "7799145045:AAGFno-2KcG7Fe0T5kZyByBxaZXM9FINEfs")
-STRING_SESSION = getenv("STRING_SESSION", "AgGXr_kAMnRR1bNGxt79KvBd0BMdz95Q_AZ2yhMJxy5U_2tbDhlsNZaX9qxEx9NQo1DXoQwi1iLjEWtt8T9XMaXwQ5_6IkF9oRORKJAoQomCpa991LYS5zgeTCfxu2wwAlEN8TqXDbJUgMRq4BT8H_S5d563bjHkwt9QxPNOAmISEQGx7jAuhzErKn_cTPKr8hsI2YKQT4l1VWvOS1BxMs7_WoIckfEMsVfjIC3jYNfVehpNkH2At777mqQDSecJUqMat3pnP7MSIucUkMVRHA9Wkc7E9HPkBUDD81vDnAILavVGPrqrVU2AKwrDYlKfwmCQK61SQg9cKXQookHdIgfQ3f-RbQAAAAHi6b6PAA")
-MONGO_DB_URL = getenv("MONGO_DB_URL", "mongodb://127.0.0.1:27017/?directConnection=true&serverSelectionTimeoutMS=2000&appName=mongosh+2.3.8")
-OWNER_ID = int(getenv("OWNER_ID", "7750519507"))
-LOG_GROUP_ID = int(getenv("LOG_GROUP_ID", "-1002193065248"))
+API_ID = int(getenv("API_ID", "29135868"))
+API_HASH = getenv("API_HASH", "04dc2f1bdf0049f6990ed2eb3d10f2ec")
+BOT_TOKEN = getenv("BOT_TOKEN", "7590617310:AAGs56QoaLWXlz6rcbLs_YUXHD8Az9gpiiM")
+STRING_SESSION = getenv("STRING_SESSION", "")
+MONGO_DB_URL = getenv("MONGO_DB_URL", "mongodb+srv://ranger1:mohaMmoha900@cluster2.24a45.mongodb.net/?retryWrites=true&w=majority&appName=Cluster2")
+OWNER_ID = int(getenv("OWNER_ID", "6543211255"))
+LOG_GROUP_ID = int(getenv("LOG_GROUP_ID", "-1002421251357"))
 START_IMAGE_URL = getenv("START_IMAGE_URL", "https://files.catbox.moe/dclvrs.mp4")
 REPO_IMAGE_URL = getenv("REPO_IMAGE_URL", "https://files.catbox.moe/nswh7s.jpg")
 STATS_IMAGE_URL = getenv("STATS_IMAGE_URL", "https://files.catbox.moe/2hgoq7.jpg")
+API_URL = "https://free-api.chatgpt4.ai/chat/completions"
 
-# Memory Database
+
+
+# اتصال به دیتابیس
 
 ACTIVE_AUDIO_CHATS = []
 ACTIVE_VIDEO_CHATS = []
 ACTIVE_MEDIA_CHATS = []
 volume_level = {}  # {chat_id: volume}
 
+MUSIC_HELP = """
+🎵 **دستورات پخش موزیک:**
 
+◈ `پخش` یا `play`
+› پخش موزیک در گروه
+
+◈ `مکث` یا `pause` 
+› توقف موقت پخش
+
+◈ `ادامه` یا `resume`
+› ادامه پخش موزیک
+
+◈ `بعدی` یا `skip`
+› رد کردن آهنگ فعلی
+
+◈ `اتمام` یا `end`
+› پایان پخش و خروج
+"""
+
+YOUTUBE_HELP = """
+📥 **دستورات دانلود:**
+
+◈ `دانلود` یا `dl`
+› دانلود از یوتیوب
+مثال: `دانلود shape of you`
+
+◈ `یوتیوب` یا `yt`
+› جستجو در یوتیوب
+مثال: `یوتیوب shape of you`
+"""
+
+ADMIN_HELP = """
+👮‍♂️ **دستورات مدیریت:**
+
+◈ `صدا` یا `vol`
+› تنظیم صدای پخش (0-200)
+
+◈ `بن` یا `ban`
+› محدود کردن کاربر
+
+◈ `آنبن` یا `unban`
+› رفع محدودیت کاربر
+"""
+
+PLAYLIST_HELP = """
+📋 **دستورات پلی‌لیست:**
+
+◈ `لیست` یا `queue`
+› نمایش صف پخش
+
+◈ `پاک` یا `clean`
+› پاک کردن صف پخش
+
+◈ `حذف` یا `del`
+› حذف یک آهنگ از صف
+"""
 QUEUE = {}
 
 # Command & Callback Handlers
-
+def get_wheel_buttons():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎯 شرکت در قرعه‌کشی", callback_data="join_wheel")],
+        [InlineKeyboardButton("📜 لیست شرکت‌کنندگان", callback_data="participants_list")],
+        [InlineKeyboardButton("🎲 چرخاندن گردونه", callback_data="spin_wheel")]
+    ])
 
 def cdx(commands: Union[str, List[str]]):
     # حذف / از لیست پیشوندها
@@ -142,6 +251,7 @@ call_config = GroupCallConfig(auto_start=False)
 
 mongo_async_cli = _mongo_async_(MONGO_DB_URL)
 mongodb = mongo_async_cli.adityaxdb
+subscriptions = mongodb.subscriptions
 
 # store start time
 __start_time__ = time.time()
@@ -253,13 +363,27 @@ def _netcat(host, port, content):
         return data
     s.close()
 
-
+async def get_youtube_info(url):
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            return info
+    except Exception as e:
+        print(f"خطا در دریافت اطلاعات ویدیو: {str(e)}")
+        return None
 async def paste_queue(content):
     loop = asyncio.get_running_loop()
     link = await loop.run_in_executor(None, partial(_netcat, "ezup.dev", 9999, content))
     return link
 
-
+async def is_call_active(chat_id):
+    try:
+        # بررسی مستقیم از گروه‌های در حال پخش
+        return await call.get_active_calls() and chat_id in [
+            chat.chat_id for chat in call.active_calls
+        ]
+    except Exception:
+        return False
 
 def get_readable_time(seconds: int) -> str:
     count = 0
@@ -294,17 +418,80 @@ chatsdb = mongodb.chatsdb
 usersdb = mongodb.usersdb
 
 
+async def generate_ai_response(prompt: str) -> str:
+    try:
+        headers = {
+            "Content-Type": "application/json"
+        }
+        
+        data = {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            "model": "gpt-3.5-turbo",
+            "temperature": 0.7,
+            "max_tokens": 2000
+        }
 
-
+        async with aiohttp.ClientSession() as session:
+            async with session.post(API_URL, json=data, headers=headers) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    return result['choices'][0]['message']['content']
+                else:
+                    return "متاسفانه در دریافت پاسخ خطایی رخ داد."
+                    
+    except Exception as e:
+        print(f"AI API Error: {str(e)}")
+        return "متاسفانه در دریافت پاسخ خطایی رخ داد."
 # Served Chats
+async def save_subscription(chat_id: int, months: int):
+    expiry_date = datetime.now() + timedelta(days=30*months)
+    subscription_data = {
+        "chat_id": chat_id,
+        "is_installed": True,
+        "install_date": datetime.now(),
+        "expiry_date": expiry_date,
+        "months": months
+    }
+    
+    await subscriptions.update_one(
+        {"chat_id": chat_id},
+        {"$set": subscription_data},
+        upsert=True
+    )
 
+async def get_subscription(chat_id: int):
+    return await subscriptions.find_one({"chat_id": chat_id})
+
+async def check_subscription(chat_id: int):
+    subscription = await get_subscription(chat_id)
+    if not subscription:
+        return False
+    
+    if not subscription.get("is_installed", False):
+        return False
+        
+    if datetime.now() > subscription["expiry_date"]:
+        return False
+        
+    return True
 async def is_served_chat(chat_id: int) -> bool:
     chat = await chatsdb.find_one({"chat_id": chat_id})
     if not chat:
         return False
     return True
 
-
+async def is_admin(chat_id: int, user_id: int) -> bool:
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+        return member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]
+    except Exception as e:
+        print(f"Error checking admin status: {e}")
+        return False
 async def get_served_chats() -> list:
     chats_list = []
     async for chat in chatsdb.find({"chat_id": {"$lt": 0}}):
@@ -319,7 +506,25 @@ async def add_served_chat(chat_id: int):
     return await chatsdb.insert_one({"chat_id": chat_id})
 
 
+async def add_referral(user_id: int, referrer_id: int):
+    await referral_collection.update_one(
+        {"user_id": user_id},
+        {"$set": {"referrer_id": referrer_id, "date": datetime.now()}},
+        upsert=True
+    )
+    # اضافه کردن 10 امتیاز به معرف
+    await add_points(referrer_id, 10)
 
+async def add_points(user_id: int, points: int):
+    await points_collection.update_one(
+        {"user_id": user_id},
+        {"$inc": {"points": points}},
+        upsert=True
+    )
+
+async def get_points(user_id: int):
+    user = await points_collection.find_one({"user_id": user_id})
+    return user["points"] if user else 0
 # Served Users
 
 async def is_served_user(user_id: int) -> bool:
@@ -341,27 +546,49 @@ async def add_served_user(user_id: int):
     if is_served:
         return
     return await usersdb.insert_one({"user_id": user_id})
-async def get_youtube_info(link: str) -> Union[dict, None]:
+
+async def is_call_active(chat_id: int) -> bool:
+    return chat_id in calls and calls[chat_id].is_connected
+
+async def set_call_volume(chat_id: int, volume: int):
+    if chat_id in calls:
+        await calls[chat_id].set_volume(volume)
+
+async def play_audio(chat_id: int, audio_file: str):
     try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(link, download=False)
-            return info
+        await start_call(chat_id)
+        group_call = calls[chat_id]
+        
+        if not group_call.is_connected:
+            await group_call.join(chat_id)
+        
+        await group_call.start_audio(AudioPiped(audio_file))
+        return True
     except Exception as e:
-        print(f"Error in get_youtube_info: {e}")
-        return None
-async def play_audio(chat_id, file_path, volume=100):
+        print(f"خطای پخش صوت: {str(e)}")
+        return False
+
+async def play_video(chat_id: int, video_file: str):
     try:
-        await call.join_group_call(
-            chat_id,
-            AudioPiped(
-                file_path,
-                HighQualityAudio(),
-            ),
-            stream_type=StreamType.PULSE_STREAM,
-        )
-        await call.change_volume_call(chat_id, volume)
+        await start_call(chat_id)
+        group_call = calls[chat_id]
+        
+        if not group_call.is_connected:
+            await group_call.join(chat_id)
+        
+        await group_call.start_video(AudioVideoPiped(video_file))
+        return True
     except Exception as e:
-        print(f"Error in play_audio: {e}")    
+        print(f"خطای پخش ویدیو: {str(e)}")
+        return False
+
+async def start_call(chat_id):
+    if chat_id not in calls:
+        group_call = GroupCallFactory().get_group_call()
+        calls[chat_id] = group_call
+
+
+
 
 CBUTTON = InlineKeyboardMarkup(
     inline_keyboard=[
@@ -606,20 +833,7 @@ def circle_image(image, size):
     output = ImageOps.fit(image, mask.size, centering=(0.5, 0.5))
     output.putalpha(mask)
     return output
-def admin_check(func):
-    async def wrapper(client, message: Message):
-        # چک کردن مالک ربات
-        if message.from_user.id in OWNER_ID:
-            return await func(client, message)
-            
-        # چک کردن ادمین بودن در گروه
-        member = await message.chat.get_member(message.from_user.id)
-        if member.status in [ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR]:
-            return await func(client, message)
-            
-        await message.reply_text("⚠️ این دستور فقط برای ادمین‌های گروه و مالک ربات در دسترس است!")
-        return
-    return wrapper
+
 
 def random_color_generator():
     r = random.randint(0, 255)
@@ -811,7 +1025,58 @@ async def clear_queue(chat_id):
 
 
 # Log All Streams
+async def start_call(chat_id):
+    """راه‌اندازی تماس گروهی"""
+    if chat_id not in calls:
+        try:
+            group_call = GroupCallConfig()
+            calls[chat_id] = group_call
+        except Exception as e:
+            print(f"خطای راه‌اندازی تماس: {str(e)}")
+            raise
 
+async def stop_call(chat_id):
+    """پایان تماس گروهی"""
+    if chat_id in calls:
+        try:
+            await calls[chat_id].stop()
+            del calls[chat_id]
+        except Exception as e:
+            print(f"خطای توقف تماس: {str(e)}")
+
+async def is_call_active(chat_id: int) -> bool:
+    """بررسی فعال بودن تماس"""
+    return chat_id in calls and calls[chat_id].is_connected
+
+async def play_audio(chat_id: int, audio_path: str):
+    """پخش فایل صوتی"""
+    try:
+        await start_call(chat_id)
+        group_call = calls[chat_id]
+        
+        if not group_call.is_connected:
+            await group_call.join(chat_id)
+        
+        await group_call.start_audio(AudioPiped(audio_path))
+        return True
+    except Exception as e:
+        print(f"خطای پخش صوت: {str(e)}")
+        return False
+
+async def play_video(chat_id: int, video_path: str):
+    """پخش فایل ویدیویی"""
+    try:
+        await start_call(chat_id)
+        group_call = calls[chat_id]
+        
+        if not group_call.is_connected:
+            await group_call.join(chat_id)
+        
+        await group_call.start_video(AudioVideoPiped(video_path))
+        return True
+    except Exception as e:
+        print(f"خطای پخش ویدیو: {str(e)}")
+        return False
 
 async def stream_logger(
     chat_id, user, title, duration, stream_type, thumbnail, position=None
@@ -969,34 +1234,56 @@ async def get_call_status(chat_id):
     return call_status
 
 
-@bot.on_message(cdz(["play", "پخش", "vplay"]) & ~pyrofl.private)
-@admin_check  # اضافه کردن دکوراتور چک ادمین
+
+@bot.on_message(cdz(["play", "پخش","vplay"]) & ~pyrofl.private)
 async def stream_audio_or_video(client, message):
     try:
         await message.delete()
     except Exception:
         pass
-        
-    chat_id = message.chat.id
-    await add_served_chat(chat_id)
     
+    chat_id = message.chat.id
+    user_id = message.from_user.id if message.from_user else None
+    
+    # بررسی دسترسی کاربر
+    try:
+        # بررسی اگر کاربر مالک ربات است
+        if user_id == OWNER_ID:  # OWNER_ID را در تنظیمات ربات تعریف کنید
+            is_authorized = True
+        else:
+            # بررسی وضعیت ادمین بودن کاربر
+            member = await bot.get_chat_member(chat_id, user_id)
+            is_authorized = member.status in ["administrator", "creator"]
+        
+        if not is_authorized:
+            await message.reply("❌ فقط ادمین‌های گروه و مالک ربات می‌توانند از دستور پخش استفاده کنند!")
+            return
+            
+    except Exception as e:
+        print(f"خطا در بررسی دسترسی: {str(e)}")
+        await message.reply("❌ خطا در بررسی دسترسی!")
+        return
+
+    await add_served_chat(chat_id)
     user = message.from_user if message.from_user else message.sender_chat
     replied = message.reply_to_message
     audio = (replied.audio or replied.voice) if replied else None
     video = (replied.video or replied.document) if replied else None
     
-    # لیست استیکرها
     stickers = [
         "🌹", "🌺", "🎉", "🎃", "💥", "🦋", "🕊️",
         "❤️", "💖", "💝", "💗", "💓", "💘", "💞",
     ]
+    
     aux = await message.reply_text(random.choice(stickers))
+    
     if audio:
         title = "Unsupported Title"
         duration = "Unknown"
         try:
             stream_file = await replied.download()
         except Exception:
+            await aux.edit("❌ خطا در دانلود فایل صوتی!")
             return
         result_x = None
         stream_type = "Audio"
@@ -1007,45 +1294,55 @@ async def stream_audio_or_video(client, message):
         try:
             stream_file = await replied.download()
         except Exception:
+            await aux.edit("❌ خطا در دانلود فایل ویدیویی!")
             return
         result_x = None
         stream_type = "Video"
-
+    
     else:
         if len(message.command) < 2:
             buttons = InlineKeyboardMarkup(
-    inline_keyboard=[
-        [
-            InlineKeyboardButton(
-                text="⌾ توقف ⌾", callback_data="pause_running_stream_on_vc"
-            ),
-            InlineKeyboardButton(
-                text="⌾ پخش ⌾", callback_data="resume_paused_stream_on_vc"
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text="⌾ توقف ⌾", callback_data="pause_running_stream_on_vc"
+                        ),
+                        InlineKeyboardButton(
+                            text="⌾ پخش ⌾", callback_data="resume_paused_stream_on_vc"
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="🔊 +10", callback_data="volume_up_10"
+                        ),
+                        InlineKeyboardButton(
+                            text="🔈 -10", callback_data="volume_down_10"
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="⌾ بعدی ⌾", callback_data="skip_and_change_stream"
+                        ),
+                        InlineKeyboardButton(
+                            text="⌾ پایان ⌾", callback_data="stop_stream_and_leave_vc"
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="˹ بروزرسانی ˼", url="https://t.me/ATRINMUSIC_TM"
+                        ),
+                        InlineKeyboardButton(
+                            text="˹ پشتیبانی ˼", url="https://t.me/ATRINMUSIC_TM1"
+                        )
+                    ],
+                    [
+                        InlineKeyboardButton(
+                            text="⌾ 𝙀𝘼𝙂𝙇𝙀 𝙏𝙀𝘼𝙈 ⌾", callback_data="force_close"
+                        )
+                    ]
+                ]
             )
-        ],
-        [
-            InlineKeyboardButton(
-                text="⌾ بعدی ⌾", callback_data="skip_and_change_stream"
-            ),
-            InlineKeyboardButton(
-                text="⌾ پایان ⌾", callback_data="stop_stream_and_leave_vc"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                text="˹ بروزرسانی ˼", url="https://t.me/ATRINMUSIC_TM"
-            ),
-            InlineKeyboardButton(
-                text="˹ پشتیبانی ˼", url="https://t.me/ATRINMUSIC_TM1"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                text="⌾ 𝙀𝘼𝙂𝙇𝙀 𝙏𝙀𝘼𝙈 ⌾", callback_data="force_close"
-            )
-        ]
-    ]
-)
+
             return await aux.edit_text(
                 "**⎋ Gɪᴠᴇ ᴍᴇ ᴀɴʏ ǫᴜɪʀʏ ᴛᴏ ᴘʟᴀʏ\n\n Exᴀᴍᴘʟᴇ:\n➥ Aᴜɪᴅɪᴏ: `/play Zihal`\n➥ Vɪᴅᴇᴏ: `/vplay Zihal`**",
             )
@@ -1120,6 +1417,14 @@ async def stream_audio_or_video(client, message):
         ],
         [
             InlineKeyboardButton(
+                text="🔊 +10", callback_data="volume_up_10"
+            ),
+            InlineKeyboardButton(
+                text="🔈 -10", callback_data="volume_down_10"
+            )
+        ],
+        [
+            InlineKeyboardButton(
                 text="⌾ بعدی ⌾", callback_data="skip_and_change_stream"
             ),
             InlineKeyboardButton(
@@ -1141,6 +1446,7 @@ async def stream_audio_or_video(client, message):
         ]
     ]
 )
+
     if stream_type == "Audio":
         stream_media = MediaStream(
             media_path=stream_file,
@@ -1404,6 +1710,80 @@ async def resume_paused_stream_on_vc(client, message):
         except Exception:
             LOGGER.info(f"🚫 خطای ادامه پخش: {e}")
             return
+@bot.on_message(filters.command("install","نصب") & filters.group)
+async def install_handler(client, message):
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+    
+    try:
+        chat_member = await bot.get_chat_member(chat_id, user_id)
+        if chat_member.status != ChatMemberStatus.OWNER:
+            await message.reply("❌ فقط مالک گروه می‌تواند ربات را نصب کند!")
+            return
+    except Exception as e:
+        print(f"Error checking admin status: {e}")
+        return
+
+    # بررسی وضعیت فعلی اشتراک
+    current_sub = await get_subscription(chat_id)
+    if current_sub and current_sub.get("is_installed"):
+        expiry = current_sub["expiry_date"]
+        await message.reply(
+            f"⚠️ این گروه قبلاً نصب شده است!\n"
+            f"📅 تاریخ انقضا: {expiry.strftime('%Y-%m-%d')}\n"
+            f"برای تمدید با پشتیبانی در تماس باشید."
+        )
+        return
+
+    buttons = [
+        [
+            InlineKeyboardButton("1 ماهه - 50,000 تومان", callback_data=f"sub_1_{chat_id}"),
+            InlineKeyboardButton("3 ماهه - 140,000 تومان", callback_data=f"sub_3_{chat_id}")
+        ],
+        [
+            InlineKeyboardButton("6 ماهه - 260,000 تومان", callback_data=f"sub_6_{chat_id}"),
+            InlineKeyboardButton("12 ماهه - 500,000 تومان", callback_data=f"sub_12_{chat_id}")
+        ],
+        [
+            InlineKeyboardButton("🔰 پشتیبانی", url="https://t.me/ATRINMUSIC_TM1")
+        ]
+    ]
+    
+    await message.reply(
+        "🎯 به پنل نصب ربات خوش آمدید\n\n"
+        "📌 لطفا یکی از پلن‌های زیر را انتخاب کنید:\n"
+        "⚠️ پس از انتخاب پلن، درگاه پرداخت برای شما ارسال خواهد شد.",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+# هندلر کالبک‌ها
+@bot.on_callback_query(filters.regex(r"^sub_(\d+)_(\d+)"))
+async def subscription_callback(client, callback_query):
+    months = int(callback_query.matches[0].group(1))
+    chat_id = int(callback_query.matches[0].group(2))
+    
+    try:
+        # ذخیره اشتراک
+        await save_subscription(chat_id, months)
+        
+        expiry_date = datetime.now() + timedelta(days=30*months)
+        await callback_query.edit_message_text(
+            f"✅ ربات با موفقیت نصب شد!\n\n"
+            f"📌 اطلاعات اشتراک:\n"
+            f"└ مدت زمان: {months} ماه\n"
+            f"└ تاریخ نصب: {datetime.now().strftime('%Y-%m-%d')}\n"
+            f"└ تاریخ انقضا: {expiry_date.strftime('%Y-%m-%d')}\n\n"
+            f"🔰 از اعتماد شما متشکریم!"
+        )
+        
+        # ارسال به کانال لاگ
+        if LOG_GROUP_ID:
+            log_text = f"#نصب_جدید\nگروه: {chat_id}\nمدت: {months} ماه"
+            await bot.send_message(LOG_GROUP_ID, log_text)
+        
+    except Exception as e:
+        print(f"Error in subscription: {e}")
+        await callback_query.answer("❌ خطا در ثبت اشتراک. لطفا مجدد تلاش کنید.", show_alert=True)
 
 
 @bot.on_message(cdx(["skip", "بعدی","vskip"]) & ~pyrofl.private)
@@ -1446,100 +1826,159 @@ async def skip_and_change_stream(client, message):
         except Exception:
             LOGGER.info(f"🚫 خطای رد کردن آهنگ: {e}")
             return
-@bot.on_message(cdx(["help", "راهنما"]) & ~pyrofl.private)
+@bot.on_message(cdx(["help", "راهنما"]) & ~filters.private)
 async def show_help(client, message):
-    help_text = """
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🎵 پخش موزیک", callback_data="help_music"),
+            InlineKeyboardButton("📥 دانلود", callback_data="help_youtube")
+        ],
+        [
+            InlineKeyboardButton("👮‍♂️ مدیریت", callback_data="help_admin"),
+            InlineKeyboardButton("📋 پلی‌لیست", callback_data="help_playlist")
+        ],
+        [
+            InlineKeyboardButton("🔄 صفحه اصلی", callback_data="help_main"),
+            InlineKeyboardButton("❌ بستن", callback_data="close_help")
+        ]
+    ])
+
+    await message.reply_text(
+        """
 ╔════════════════════╗
 ║   🎵 𝙈𝙐𝙎𝙄𝘾 𝙃𝙀𝙇𝙋 🎵   ║
 ╚════════════════════╝
 
-⌾ دستورات پخش موزیک:
+👋 به راهنمای ربات خوش آمدید
+لطفا بخش مورد نظر خود را انتخاب کنید:
 
-◈ `پخش` یا `play`
-› پخش موزیک در گروه
+╔════════════════════╗
+║  @ATRINMUSIC_TM  ║
+╚════════════════════╝
+""",
+        reply_markup=keyboard
+    )
 
-◈ `مکث` یا `pause` 
-› توقف موقت پخش
+@bot.on_callback_query(filters.regex("^help_"))
+async def help_callback(client, callback_query):
+    command = callback_query.data.split("_")[1]
+    
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🎵 پخش موزیک", callback_data="help_music"),
+            InlineKeyboardButton("📥 دانلود", callback_data="help_youtube")
+        ],
+        [
+            InlineKeyboardButton("👮‍♂️ مدیریت", callback_data="help_admin"),
+            InlineKeyboardButton("📋 پلی‌لیست", callback_data="help_playlist")
+        ],
+        [
+            InlineKeyboardButton("🔄 صفحه اصلی", callback_data="help_main"),
+            InlineKeyboardButton("❌ بستن", callback_data="close_help")
+        ]
+    ])
 
-◈ `ادامه` یا `resume`
-› ادامه پخش موزیک
+    if command == "main":
+        text = """
+╔════════════════════╗
+║   🎵 𝙈𝙐𝙎𝙄𝘾 𝙃𝙀𝙇𝙋 🎵   ║
+╚════════════════════╝
 
-◈ `بعدی` یا `skip`
-› رد کردن آهنگ فعلی
-
-◈ `اتمام` یا `end`
-› پایان پخش و خروج
-
-◈ `دانلود` یا `dl`
-› دانلود از یوتیوب
-مثال: `دانلود shape of you`
+👋 به راهنمای ربات خوش آمدید
+لطفا بخش مورد نظر خود را انتخاب کنید:
 
 ╔════════════════════╗
 ║  @ATRINMUSIC_TM  ║
 ╚════════════════════╝
 """
-    await message.reply_text(help_text)
-@bot.on_message(cdx(["صدا", "volume", "vol"]) & ~filters.private)
-async def set_volume_command(client, message):
-    chat_id = message.chat.id
+    elif command == "music":
+        text = MUSIC_HELP
+    elif command == "youtube":
+        text = YOUTUBE_HELP
+    elif command == "admin":
+        text = ADMIN_HELP
+    elif command == "playlist":
+        text = PLAYLIST_HELP
+    else:
+        return
+
     try:
+        await callback_query.message.edit_text(
+            text,
+            reply_markup=keyboard
+        )
+    except Exception as e:
+        print(e)
+
+@bot.on_callback_query(filters.regex("^close_help"))
+async def close_help(client, callback_query):
+    await callback_query.message.delete()
+@bot.on_message(cdz(["vol", "صدا"]) & ~pyrofl.private)
+async def change_volume(client, message):
+    try:
+        chat_id = message.chat.id
+        
+        # بررسی دسترسی ادمین
+        user_id = message.from_user.id
+        member = await bot.get_chat_member(chat_id, user_id)
+        if not member.status in [ChatMemberStatus.OWNER, ChatMemberStatus.ADMINISTRATOR]:
+            return await message.reply("❌ فقط ادمین‌های گروه می‌توانند صدا را تنظیم کنند!")
+
+        # بررسی دستور و مقدار صدا
         if len(message.command) < 2:
-            return await message.reply_text(
-                "**استفاده:** `/صدا [0-200]`\n**مثال:** `/صدا 100`"
-            )
+            return await message.reply("❌ لطفا مقدار صدا را به صورت عدد وارد کنید (0-200)")
         
-        volume = int(message.command[1])
-        
-        if volume < 0 or volume > 200:
-            return await message.reply_text("**❌ میزان صدا باید بین 0 تا 200 باشد**")
+        try:
+            volume = int(message.command[1])
+        except ValueError:
+            return await message.reply("❌ لطفا یک عدد معتبر وارد کنید")
 
-        # بررسی وضعیت تماس
-        if not call.get_active_call(chat_id):
-            return await message.reply_text("**➥ هیچ پخش جاری وجود ندارد**")
+        if not 0 <= volume <= 200:
+            return await message.reply("❌ مقدار صدا باید بین 0 تا 200 باشد")
 
-        # تنظیم صدا
-        await call.change_volume_call(chat_id, volume)
-        
-        await message.reply_text(f"**🔊 میزان صدا تنظیم شد روی: {volume}%**")
+        # بررسی فعال بودن پخش
+        if not await is_call_active(chat_id):
+            return await message.reply("❌ در حال حاضر چیزی پخش نمی‌شود!")
 
-    except ValueError:
-        await message.reply_text("**❌ لطفا یک عدد معتبر وارد کنید**")
+        # تغییر صدا
+        await set_call_volume(chat_id, volume)
+        await message.reply(f"🔊 میزان صدا به {volume}% تغییر کرد")
+
     except Exception as e:
-        await message.reply_text(f"**❌ خطا در تنظیم صدا:** `{str(e)}`")
-
-# هندلر دکمه کاهش صدا
-@bot.on_callback_query(filters.regex("decrease_volume"))
-async def decrease_volume_callback(client, callback_query):
-    chat_id = callback_query.message.chat.id
+        print(f"خطای تغییر صدا: {str(e)}")
+        await message.reply("❌ خطا در تغییر صدا")
+@bot.on_message(cdx(["reload", "ریلود"]) & filters.group)
+async def reload_vc(client, message):
     try:
-        if not call.get_active_call(chat_id):
-            return await callback_query.answer("پخش جاری وجود ندارد!", show_alert=True)
-
-        current_volume = call.get_call(chat_id).volume or 100
-        new_volume = max(0, current_volume - 10)
+        if not await is_admin(message.chat.id, message.from_user.id):
+            return await message.reply("❌ فقط ادمین‌ها می‌توانند ریلود کنند!")
+            
+        chat_id = message.chat.id
         
-        await call.change_volume_call(chat_id, new_volume)
+        if await pytgcalls.get_call(chat_id):
+            try:
+                await pytgcalls.leave_group_call(chat_id)
+            except:
+                pass
+                
+        await asyncio.sleep(1)
         
-        await callback_query.answer(f"🔈 صدا: {new_volume}%", show_alert=True)
+        await pytgcalls.join_group_call(
+            chat_id,
+            InputAudioStream(
+                'input.raw',
+                HighQualityAudio(),
+            ),
+        )
+        
+        await message.reply("✅ تنظیمات صدا با موفقیت بازنشانی شد")
+        
     except Exception as e:
-        await callback_query.answer(f"خطا: {str(e)}", show_alert=True)
+        await message.reply(f"❌ خطا در بازنشانی: {str(e)}")
 
-# هندلر دکمه افزایش صدا
-@bot.on_callback_query(filters.regex("increase_volume"))
-async def increase_volume_callback(client, callback_query):
-    chat_id = callback_query.message.chat.id
-    try:
-        if not call.get_active_call(chat_id):
-            return await callback_query.answer("پخش جاری وجود ندارد!", show_alert=True)
+# تنظیم اولیه PyTgCalls
 
-        current_volume = call.get_call(chat_id).volume or 100
-        new_volume = min(200, current_volume + 10)
-        
-        await call.change_volume_call(chat_id, new_volume)
-        
-        await callback_query.answer(f"🔊 صدا: {new_volume}%", show_alert=True)
-    except Exception as e:
-        await callback_query.answer(f"خطا: {str(e)}", show_alert=True)
+
 @bot.on_message(cdx(["yt", "یوتیوب"]) & ~filters.private)
 async def youtube_search(client, message):
     try:
@@ -1551,17 +1990,14 @@ async def youtube_search(client, message):
         query = " ".join(message.command[1:])
         m = await message.reply_text("🔎 در حال جستجو...")
 
-        # جستجو در یوتیوب
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             try:
-                # جستجو با استفاده از ytsearch
                 search_query = f"ytsearch5:{query}"
                 results = ydl.extract_info(search_query, download=False)['entries']
 
                 if not results:
                     return await m.edit("❌ موردی یافت نشد!")
 
-                # ساخت لیست نتایج
                 text = "🎵 **نتایج جستجو در یوتیوب:**\n\n"
                 for i, item in enumerate(results, 1):
                     title = item.get('title', 'No Title')
@@ -1573,7 +2009,6 @@ async def youtube_search(client, message):
                     text += f"⏱ مدت: {duration} | 👁 بازدید: {views:,}\n"
                     text += f"🔗 {url}\n\n"
 
-                # ارسال نتایج
                 await m.edit(
                     text,
                     disable_web_page_preview=True,
@@ -1597,17 +2032,14 @@ async def youtube_search(client, message):
     except Exception as e:
         await message.reply_text(f"❌ خطا: {str(e)}")
 
-# هندلر دانلود از طریق دکمه
 @bot.on_callback_query(filters.regex(r"^download_(.+)"))
 async def download_callback(client, callback_query):
     video_id = callback_query.matches[0].group(1)
     message = callback_query.message
-    user_id = callback_query.from_user.id
 
     await callback_query.message.edit_text("⏳ در حال دانلود...")
 
     try:
-        # دریافت اطلاعات ویدیو
         info = await get_youtube_info(f"https://www.youtube.com/watch?v={video_id}")
         if not info:
             return await message.edit("❌ خطا در دریافت اطلاعات ویدیو")
@@ -1616,11 +2048,9 @@ async def download_callback(client, callback_query):
         duration = info.get('duration_string', 'نامشخص')
         thumbnail = info.get('thumbnail', None)
         
-        # دانلود فایل
         with yt_dlp.YoutubeDL(download_opts) as ydl:
             ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
 
-        # پیدا کردن فایل دانلود شده
         audio_file = None
         for file in os.listdir():
             if file.startswith(title) and file.endswith('.mp3'):
@@ -1630,7 +2060,6 @@ async def download_callback(client, callback_query):
         if not audio_file:
             return await message.edit("❌ خطا در دانلود فایل")
 
-        # ارسال فایل
         caption = f"""
 🎵 **عنوان:** {title}
 ⏱ **مدت زمان:** {duration}
@@ -1649,7 +2078,6 @@ async def download_callback(client, callback_query):
             thumb=thumbnail
         )
 
-        # پاکسازی فایل‌ها
         try:
             os.remove(audio_file)
         except:
@@ -1659,7 +2087,157 @@ async def download_callback(client, callback_query):
 
     except Exception as e:
         await message.edit(f"❌ خطا در دانلود: {str(e)}")
+@bot.on_message(cdz(["mylink", "لینک_من"]))
+async def get_referral_link(client, message):
+    user_id = message.from_user.id
+    chat_id = message.chat.id
+    
+    try:
+        # ساخت لینک دعوت
+        invite_link = await bot.create_chat_invite_link(
+            chat_id,
+            name=f"Referral_{user_id}",
+            creates_join_request=False
+        )
+        
+        await message.reply(
+            f"🔗 لینک دعوت شما:\n{invite_link.invite_link}\n\n"
+            "✨ به ازای هر عضو جدید 10 امتیاز دریافت می‌کنید!"
+        )
+    except Exception as e:
+        await message.reply("❌ خطا در ساخت لینک دعوت!")
 
+@bot.on_chat_join_request()
+async def handle_join_request(client, join_request):
+    user_id = join_request.from_user.id
+    chat_id = join_request.chat.id
+    invite_link = join_request.invite_link
+
+    if invite_link and "Referral_" in invite_link.name:
+        referrer_id = int(invite_link.name.split("_")[1])
+        await add_referral(user_id, referrer_id)        
+@bot.on_message(cdz(["dlvideo", "دانلود_فیلم"]) & ~pyrofl.private)
+async def download_youtube_video(client, message):
+    try:
+        # چک کردن وجود فایل کوکی
+        if not os.path.exists(COOKIES_FILE):
+            await message.reply("❌ فایل کوکی یافت نشد! لطفا فایل cookies.txt را در سرور آپلود کنید.")
+            return
+
+        # چک کردن ادمین بودن
+        chat_id = message.chat.id
+        user_id = message.from_user.id
+        
+        try:
+            member = await bot.get_chat_member(chat_id, user_id)
+            if member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+                await message.reply("❌ فقط ادمین‌های گروه می‌توانند از دستور دانلود استفاده کنند!")
+                return
+        except Exception as e:
+            print(f"Error checking admin status: {e}")
+            await message.reply("❌ خطا در بررسی وضعیت ادمین!")
+            return
+
+        # بررسی لینک یا کوئری جستجو
+        if len(message.command) < 2:
+            await message.reply(
+                "❌ لطفا لینک یا نام ویدیو را وارد کنید!\n\n"
+                "مثال:\n"
+                "`دانلود_فیلم https://youtube.com/...`\n"
+                "یا\n"
+                "`دانلود_فیلم نام ویدیو`"
+            )
+            return
+
+        search_query = message.text.split(None, 1)[1]
+        status_msg = await message.reply("🔍 در حال جستجو...")
+
+        # تنظیمات دانلود ویدیو با کوکی
+        video_opts = {
+            'format': 'best[height<=720]',  # محدود به کیفیت 720p
+            'outtmpl': 'downloads/%(title)s.%(ext)s',
+            'noplaylist': True,
+            'merge_output_format': 'mp4',
+            'quiet': True,
+            'no_warnings': True,
+            'ignoreerrors': False,
+            'nocheckcertificate': True,
+            'logtostderr': False,
+            'source_address': '0.0.0.0',
+            'cookiefile': COOKIES_FILE,  # استفاده از فایل کوکی
+            'extract_flat': True,
+            'youtube_include_dash_manifest': False,
+        }
+
+        try:
+            # جستجو و دریافت اطلاعات ویدیو
+            if "youtube.com" in search_query or "youtu.be" in search_query:
+                with yt_dlp.YoutubeDL(video_opts) as ydl:
+                    video_info = ydl.extract_info(search_query, download=False)
+            else:
+                # جستجو در یوتیوب
+                vs = VideosSearch(search_query, limit=1)
+                results = await vs.next()
+                if not results or not results.get("result"):
+                    await status_msg.edit("❌ ویدیویی یافت نشد!")
+                    return
+                    
+                video_url = results["result"][0]["link"]
+                with yt_dlp.YoutubeDL(video_opts) as ydl:
+                    video_info = ydl.extract_info(video_url, download=False)
+
+            if not video_info:
+                await status_msg.edit("❌ خطا در دریافت اطلاعات ویدیو!")
+                return
+
+            title = video_info.get('title', 'Unknown Title')
+            duration = video_info.get('duration', 0)
+
+            # نمایش اطلاعات دانلود
+            await status_msg.edit(
+                f"⏳ در حال دانلود:\n\n"
+                f"🎥 {title}\n"
+                f"⏱ مدت زمان: {duration//60}:{duration%60:02d}"
+            )
+
+            # دانلود ویدیو
+            video_path = f"downloads/{title}.mp4"
+            with yt_dlp.YoutubeDL(video_opts) as ydl:
+                ydl.download([video_info['webpage_url']])
+
+            # آپلود به تلگرام
+            if os.path.exists(video_path):
+                await status_msg.edit("📤 در حال آپلود به تلگرام...")
+                
+                try:
+                    await message.reply_video(
+                        video_path,
+                        caption=(
+                            f"🎥 **عنوان:** {title}\n"
+                            f"⏱ **مدت زمان:** {duration//60}:{duration%60:02d}\n\n"
+                            f"🤖 @{bot.me.username}"
+                        ),
+                        duration=duration,
+                        supports_streaming=True
+                    )
+                    await status_msg.delete()
+                except Exception as e:
+                    await status_msg.edit(f"❌ خطا در آپلود: {str(e)}")
+                finally:
+                    # پاک کردن فایل
+                    try:
+                        os.remove(video_path)
+                    except:
+                        pass
+            else:
+                await status_msg.edit("❌ خطا در دانلود ویدیو!")
+
+        except Exception as e:
+            await status_msg.edit(f"❌ خطا در دانلود: {str(e)}")
+
+    except Exception as e:
+        print(f"Main error: {str(e)}")
+        await message.reply("❌ خطایی رخ داد. لطفا مجدد تلاش کنید.")
 # هندلر بستن پیام
 @bot.on_callback_query(filters.regex("^close"))
 async def close_callback(client, callback_query):
@@ -1729,98 +2307,143 @@ async def git_repo_link(client, message):
         LOGGER.info(f"🚫 Error: {e}")
         return
 
-
-
-@bot.on_message(cdx(["end", "اتمام","vend"]) & ~pyrofl.private)
-async def stop_stream_and_leave_vc(client, message):
-    chat_id = message.chat.id
+@bot.on_message(filters.command(["start_wheel", "شروع_قرعه‌کشی"]) & ~filters.private)
+async def start_wheel_cmd(client, message):
     try:
-        await message.delete()
-    except Exception:
-        pass
-    try:
-        call_status = await get_call_status(chat_id)
-        if call_status == "NOTHING":
-            return await message.reply_text("**➥ هیچ پخش جاری وجود ندارد**")
-        elif call_status == "IDLE":
-            return await message.reply_text("**➥ با موفقیت از چت صوتی خارج شد**")
-        elif call_status == "PLAYING" or call_status == "PAUSED":
-            await close_stream(chat_id)
-            return await message.reply_text("**➥ پخش متوقف شد و از چت صوتی خارج شد...**")
-        else:
-            return
-    except Exception as e:
-        try:
-            await bot.send_message(chat_id, f"**🚫 خطا در اتمام پخش:** `{e}`")
-        except Exception:
-            LOGGER.info(f"🚫 خطای اتمام پخش: {e}")
+        chat_id = message.chat.id
+        user_id = message.from_user.id
+        
+        # چک کردن ادمین بودن
+        if not await is_admin(chat_id, user_id):
+            await message.reply("❌ فقط ادمین‌ها می‌توانند قرعه‌کشی را شروع کنند!")
             return
 
-@call.on_update(pytgfl.chat_update(ChatUpdate.Status.CLOSED_VOICE_CHAT))
-@call.on_update(pytgfl.chat_update(ChatUpdate.Status.KICKED))
-@call.on_update(pytgfl.chat_update(ChatUpdate.Status.LEFT_GROUP))
-async def stream_services_handler(_, update: Update):
-    chat_id = update.chat_id
-    return await close_stream(chat_id)
-
-
-@call.on_update(pytgfl.stream_end())
-async def stream_end_handler(_, update: Update):
-    chat_id = update.chat_id
-    return await change_stream(chat_id)
-
-
-@bot.on_message(cdx("ping") & ~pyrofl.bot)
-async def check_sping(client, message):
-    start = datetime.now()
-    end = datetime.now()
-    ms = (end - start).microseconds / 1000
-    m = await message.reply_text("**⥂ Pɪɴɢ ᴘᴏɴɢ...!!**")
-    await m.edit(f"**➠ Pɪɴɢᴇᴅ...!!\nLᴀᴛᴇɴᴄʏ:** `{ms}` ᴍs")
-
-
-@bot.on_message(cdx(["repo", "repository"]) & ~pyrofl.bot)
-async def git_repo_link(client, message):
-    if message.sender_chat:
-        mention = message.sender_chat.title
-    else:
-        mention = message.from_user.mention
-    if message.chat.type == ChatType.PRIVATE:
-        caption = f"""```
-        {mention}```
-        ```• ᴜsᴇ ᴛʜɪs ʀᴇᴘᴏ •
-➠ Aɴʏ ᴇʀʀᴏʀ sᴇɴᴅ ss ᴏᴜʀ sᴜᴘᴘᴏʀᴛ```"""
-    else:
-        caption = f"** Hᴇʟʟᴏ, {mention}.**"
-    buttons = InlineKeyboardMarkup(
-    [
-        [
-            InlineKeyboardButton(
-                text="˹ پشتیبانی ˼",
-                url="https://t.me/EAGLE_SUPPORT" 
-            ),
-            InlineKeyboardButton(
-                text="˹ مالک ˼",
-                url="https://t.me/EAGLE_SOURCE"
-            ),
-        ],
-        [
-            InlineKeyboardButton(
-                text="⌾ 𝙀𝘼𝙂𝙇𝙀 𝙏𝙀𝘼𝙈 ⌾",
-                callback_data="force_close"
-            ),
-        ]
-    ]
-)
-    try:
-        await message.reply_photo(
-            photo=REPO_IMAGE_URL, caption=caption, reply_markup=buttons
+        # گرفتن جایزه از متن پیام
+        command = message.text.split()
+        if len(command) < 2:
+            await message.reply("❌ لطفا جایزه را مشخص کنید!\nمثال: /start_wheel یک عدد نیترو")
+            return
+            
+        prize = " ".join(command[1:])
+        
+        # شروع قرعه‌کشی جدید
+        wheel.is_active = True
+        wheel.participants = []
+        wheel.prize = prize
+        
+        await message.reply(
+            f"🎲 قرعه‌کشی جدید شروع شد!\n\n"
+            f"🎁 جایزه: {prize}\n"
+            f"👥 برای شرکت در قرعه‌کشی، روی دکمه زیر کلیک کنید.",
+            reply_markup=get_wheel_buttons()
         )
+
     except Exception as e:
-        LOGGER.info(f"🚫 Error: {e}")
-        return
+        print(f"Error in start_wheel: {e}")
+        await message.reply("❌ خطایی رخ داد. لطفا مجدد تلاش کنید.")
 
+@bot.on_callback_query(filters.regex("^join_wheel$"))
+async def join_wheel_callback(client, callback_query: CallbackQuery):
+    try:
+        if not wheel.is_active:
+            await callback_query.answer("❌ در حال حاضر قرعه‌کشی فعالی وجود ندارد!", show_alert=True)
+            return
+            
+        user_id = callback_query.from_user.id
+        if user_id in wheel.participants:
+            await callback_query.answer("⚠️ شما قبلاً در این قرعه‌کشی شرکت کرده‌اید!", show_alert=True)
+            return
+            
+        wheel.participants.append(user_id)
+        await callback_query.answer("✅ شما با موفقیت در قرعه‌کشی ثبت‌نام شدید!", show_alert=True)
+        
+        # بروزرسانی پیام اصلی
+        await callback_query.message.edit_text(
+            f"🎲 قرعه‌کشی در حال انجام\n\n"
+            f"🎁 جایزه: {wheel.prize}\n"
+            f"👥 تعداد شرکت‌کنندگان: {len(wheel.participants)}",
+            reply_markup=get_wheel_buttons()
+        )
 
+    except Exception as e:
+        print(f"Error in join_wheel_callback: {e}")
+        await callback_query.answer("❌ خطایی رخ داد. لطفا مجدد تلاش کنید.", show_alert=True)
+
+@bot.on_callback_query(filters.regex("^participants_list$"))
+async def participants_list_callback(client, callback_query: CallbackQuery):
+    try:
+        if not wheel.is_active:
+            await callback_query.answer("❌ قرعه‌کشی فعالی وجود ندارد!", show_alert=True)
+            return
+            
+        if not wheel.participants:
+            await callback_query.answer("❌ هنوز کسی در قرعه‌کشی شرکت نکرده است!", show_alert=True)
+            return
+            
+        participants_text = "👥 لیست شرکت‌کنندگان:\n\n"
+        for i, user_id in enumerate(wheel.participants, 1):
+            user = await client.get_users(user_id)
+            participants_text += f"{i}. {user.mention}\n"
+            
+        await callback_query.message.reply(participants_text)
+        await callback_query.answer()
+
+    except Exception as e:
+        print(f"Error in participants_list_callback: {e}")
+        await callback_query.answer("❌ خطایی رخ داد. لطفا مجدد تلاش کنید.", show_alert=True)
+
+@bot.on_callback_query(filters.regex("^spin_wheel$"))
+async def spin_wheel_callback(client, callback_query: CallbackQuery):
+    try:
+        chat_id = callback_query.message.chat.id
+        user_id = callback_query.from_user.id
+        
+        # چک کردن ادمین بودن
+        if not await is_admin(chat_id, user_id):
+            await callback_query.answer("❌ فقط ادمین‌ها می‌توانند گردونه را بچرخانند!", show_alert=True)
+            return
+
+        if not wheel.is_active:
+            await callback_query.answer("❌ قرعه‌کشی فعالی وجود ندارد!", show_alert=True)
+            return
+
+        if len(wheel.participants) == 0:
+            await callback_query.answer("❌ هیچ شرکت‌کننده‌ای در قرعه‌کشی وجود ندارد!", show_alert=True)
+            return
+
+        # انیمیشن چرخش
+        msg = await callback_query.message.edit_text("🎰 در حال چرخش گردونه...")
+        for i in range(3):
+            await asyncio.sleep(1)
+            await msg.edit_text(f"🎰 در حال چرخش گردونه{'.'*(i+1)}")
+
+        # انتخاب برنده
+        winner_id = random.choice(wheel.participants)
+        winner = await client.get_users(winner_id)
+        
+        await msg.edit_text(
+            f"🎉 تبریک! برنده قرعه‌کشی:\n\n"
+            f"👤 {winner.mention}\n"
+            f"🎁 جایزه: {wheel.prize}\n\n"
+            f"تعداد شرکت‌کنندگان: {len(wheel.participants)}"
+        )
+
+        # پایان قرعه‌کشی
+        wheel.is_active = False
+        wheel.participants = []
+        wheel.prize = ""
+
+    except Exception as e:
+        print(f"Error in spin_wheel_callback: {e}")
+        await callback_query.answer("❌ خطایی رخ داد. لطفا مجدد تلاش کنید.", show_alert=True)
+
+# تابع کمکی برای چک کردن ادمین بودن
+async def is_admin(chat_id: int, user_id: int) -> bool:
+    try:
+        member = await bot.get_chat_member(chat_id, user_id)
+        return member.status in ["administrator", "creator"]
+    except:
+        return False
 
 @bot.on_message(cdx("update") & bot_owner_only)
 async def update_repo_latest(client, message):
@@ -1866,7 +2489,70 @@ async def update_repo_latest(client, message):
     sys.exit()
     return
 
+@bot.on_message(filters.command(["ai", "جمینی", "هی"]) & ~filters.private)
+async def ai_handler(client: Client, message: Message):
+    try:
+        # بررسی وجود متن سوال
+        if len(message.command) < 2:
+            await message.reply(
+                "❌ لطفا سوال خود را همراه با دستور وارد کنید!\n"
+                "مثال: /ai سلام خوبی؟"
+            )
+            return
 
+        # نمایش وضعیت در حال تایپ
+        await client.send_chat_action(message.chat.id, "typing")
+            
+        # گرفتن متن سوال
+        question = " ".join(message.command[1:])
+        
+        # ارسال پیام در حال پردازش
+        processing_msg = await message.reply("🤖 در حال پردازش سوال شما...")
+        
+        # دریافت پاسخ از AI
+        response = await generate_ai_response(question)
+        
+        # ساخت متن پاسخ
+        user_mention = message.from_user.mention if message.from_user else "کاربر ناشناس"
+        reply_text = (
+            f"🤖 پاسخ هوش مصنوعی:\n\n"
+            f"{response}\n\n"
+            f"━━━━━━━━━━━━━━\n"
+            f"🔍 سوال: {question}\n"
+            f"👤 کاربر: {user_mention}\n"
+            f"🤖 موتور: GPT-3.5"
+        )
+        
+        # ویرایش پیام با پاسخ نهایی
+        await processing_msg.edit(reply_text)
+        
+    except Exception as e:
+        print(f"AI Error: {str(e)}")
+        await message.reply("❌ متاسفانه خطایی رخ داد. لطفا مجددا تلاش کنید.")
+
+@bot.on_message(filters.command(["aihelp", "راهنمای_هوش_مصنوعی"]) & ~filters.private)
+async def ai_help_handler(client: Client, message: Message):
+    help_text = """
+🤖 **راهنمای استفاده از هوش مصنوعی**
+
+📝 **دستورات:**
+• `/ai` یا `/جمینی` یا `/هی` + متن سوال
+• مثال: `/ai سلام، حالت چطوره؟`
+
+🔰 **قابلیت‌ها:**
+• پاسخگویی به سوالات
+• نوشتن متن و مقاله
+• حل مسائل ریاضی
+• برنامه‌نویسی
+• ترجمه متون
+• و موارد دیگر...
+
+⚠️ **نکات:**
+• سوالات خود را واضح و دقیق بپرسید
+• از ارسال محتوای نامناسب خودداری کنید
+• این سرویس کاملاً رایگان است
+"""
+    await message.reply(help_text)
 @bot.on_message(cdx(["stats", "stat"]) & ~pyrofl.bot)
 async def git_repo_link(client, message):
     if message.sender_chat:
@@ -2036,6 +2722,6 @@ if __name__ == "__main__":
     
     
     
-    
-    
-    
+   
+
+
