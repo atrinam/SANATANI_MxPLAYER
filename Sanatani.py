@@ -1710,6 +1710,31 @@ async def resume_paused_stream_on_vc(client, message):
         except Exception:
             LOGGER.info(f"🚫 خطای ادامه پخش: {e}")
             return
+@bot.on_message(cdx(["end", "اتمام","vend"]) & ~pyrofl.private)
+async def stop_stream_and_leave_vc(client, message):
+    chat_id = message.chat.id
+    try:
+        await message.delete()
+    except Exception:
+        pass
+    try:
+        call_status = await get_call_status(chat_id)
+        if call_status == "NOTHING":
+            return await message.reply_text("**➥ هیچ پخش جاری وجود ندارد**")
+        elif call_status == "IDLE":
+            return await message.reply_text("**➥ با موفقیت از چت صوتی خارج شد**")
+        elif call_status == "PLAYING" or call_status == "PAUSED":
+            await close_stream(chat_id)
+            return await message.reply_text("**➥ پخش متوقف شد و از چت صوتی خارج شد...**")
+        else:
+            return
+    except Exception as e:
+        try:
+            await bot.send_message(chat_id, f"**🚫 خطا در اتمام پخش:** `{e}`")
+        except Exception:
+            LOGGER.info(f"🚫 خطای اتمام پخش: {e}")
+            return
+           
 @bot.on_message(filters.command("install","نصب") & filters.group)
 async def install_handler(client, message):
     chat_id = message.chat.id
