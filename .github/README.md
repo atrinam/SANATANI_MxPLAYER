@@ -30,7 +30,7 @@
 <details>
   <summary>Click here to heruko</summary>
   <br>
-  <a href="https://dashboard.heroku.com/new?template=https://github.com/BABY-MUSIC/SANATANI_MxPLAYER">
+  <a href="https://dashboard.heroku.com/new?template=https://github.com/atrinam/SANATANI_MxPLAYER">
       <img src="https://img.shields.io/badge/Deploy_to_Heroku-red?style=for-the-badge&logo=heroku&logoColor=green" alt="Deploy to Heroku">
   </a>
 </details>
